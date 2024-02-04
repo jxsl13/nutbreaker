@@ -49,7 +49,7 @@ func (b boundary) String() string {
 func newBoundaryFromDB(tx *nutsdb.Tx, bucket string, m *nutsdb.SortedSetMember) (b boundary, err error) {
 	defer func() {
 		if err != nil {
-			err = fmt.Errorf("failed to create boundary: %w", err)
+			err = fmt.Errorf("failed to create boundary: score %f: %w", m.Score, err)
 		}
 	}()
 
@@ -270,8 +270,7 @@ func (b *boundary) IsInf() bool {
 
 func (b *boundary) Insert(tx *nutsdb.Tx, bucketKV string, zKey []byte) error {
 	if b.IsInf() {
-		// nothing to do
-		return nil
+		panic(fmt.Sprintf("cannot insert infinite boundary with Insert: %s", b))
 	}
 	return b.InsertInf(tx, bucketKV, zKey)
 }

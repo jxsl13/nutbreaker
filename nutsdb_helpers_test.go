@@ -9,7 +9,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func initNutsDB(t *testing.T) (db *nutsdb.DB, bucketName string, sortedSetKey []byte, cleanup func()) {
+func initNutsDB(t *testing.T, withInfBoundaries bool) (db *nutsdb.DB, bucketName string, sortedSetKey []byte, cleanup func()) {
+
 	require := require.New(t)
 	dir := generateRandomDbDirName()
 	var err error
@@ -35,6 +36,17 @@ func initNutsDB(t *testing.T) (db *nutsdb.DB, bucketName string, sortedSetKey []
 	})
 	require.NoError(err)
 
+	if withInfBoundaries {
+		err = db.Update(func(tx *nutsdb.Tx) error {
+			err = negInfBoundary.InsertInf(tx, bucketName, sortedSetKey)
+			if err != nil {
+				return err
+			}
+			return posInfBoundary.InsertInf(tx, bucketName, sortedSetKey)
+		})
+		require.NoError(err)
+	}
+
 	return db, bucketName, sortedSetKey, func() {
 		require.NoError(db.Close())
 		require.NoError(os.RemoveAll(dir))
@@ -53,6 +65,30 @@ func getBoundary(t *testing.T, tx *nutsdb.Tx, bucket string, zKey []byte, score 
 
 	b, err := newBoundaryFromDB(tx, bucket, ms[0])
 	require.NoError(err)
+	return b
+}
+
+func getAllBoundaries(t *testing.T, tx *nutsdb.Tx, bucket string, zKey []byte, withStartEnd bool) []boundary {
+	opts := &nutsdb.GetByScoreRangeOptions{
+		ExcludeStart: !withStartEnd,
+		ExcludeEnd:   !withStartEnd,
+	}
+	require := require.New(t)
+	ms, err := tx.ZRangeByScore(
+		bucket,
+		zKey,
+		negInf,
+		posInf,
+		opts,
+	)
+	require.NoError(err)
+
+	var b []boundary
+	for _, m := range ms {
+		bb, err := newBoundaryFromDB(tx, bucket, m)
+		require.NoError(err)
+		b = append(b, bb)
+	}
 	return b
 }
 
@@ -80,5 +116,4 @@ func insertRanges(t *testing.T, tx *nutsdb.Tx, sameValue bool, bucket string, zK
 		require.NoError(err, "Insert() error = %v, wantErr %v", err, true)
 	}
 	return b
-
 }
