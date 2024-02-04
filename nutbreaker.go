@@ -207,7 +207,7 @@ func (n *NutBreaker) all(tx *nutsdb.Tx) (inside []boundary, err error) {
 	inside = make([]boundary, 0, len(members))
 	var b boundary
 	for _, m := range members {
-		b, err = newBoundaryFromDB(m.Score, m.Value)
+		b, err = newBoundaryFromDB(tx, n.blacklistBucket, m)
 		if err != nil {
 			return nil, err
 		}
@@ -281,7 +281,7 @@ func (n *NutBreaker) vicinity(tx *nutsdb.Tx, low, high boundary, num int) (below
 
 	// create below IPs
 	for _, m := range membersBelow {
-		b, err = newBoundaryFromDB(m.Score, m.Value)
+		b, err = newBoundaryFromDB(tx, n.blacklistBucket, m)
 		if err != nil {
 			return nil, nil, nil, err
 		}
@@ -295,7 +295,7 @@ func (n *NutBreaker) vicinity(tx *nutsdb.Tx, low, high boundary, num int) (below
 
 	// create inside IPs
 	for _, m := range membersInside {
-		b, err = newBoundaryFromDB(m.Score, m.Value)
+		b, err = newBoundaryFromDB(tx, n.blacklistBucket, m)
 		if err != nil {
 			return nil, nil, nil, err
 		}
@@ -308,7 +308,7 @@ func (n *NutBreaker) vicinity(tx *nutsdb.Tx, low, high boundary, num int) (below
 
 	// create above IPs
 	for _, m := range membersAbove {
-		b, err = newBoundaryFromDB(m.Score, m.Value)
+		b, err = newBoundaryFromDB(tx, n.blacklistBucket, m)
 		if err != nil {
 			return nil, nil, nil, err
 		}

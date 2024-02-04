@@ -44,14 +44,29 @@ func (b boundary) String() string {
 	}
 }
 
-func newBoundaryFromDB(score float64, value []byte) (boundary, error) {
-	var v dbValue
-	err := json.Unmarshal(value, &v)
+// value is the database value of the boundary
+// the marshaled json string
+func newBoundaryFromDB(tx *nutsdb.Tx, bucket string, m *nutsdb.SortedSetMember) (b boundary, err error) {
+	defer func() {
+		if err != nil {
+			err = fmt.Errorf("failed to create boundary: %w", err)
+		}
+	}()
+
+	key := m.Value
+
+	value, err := tx.Get(bucket, key)
 	if err != nil {
-		return empty, fmt.Errorf("failed to create boundary: %w", err)
+		return empty, err
 	}
 
-	return newBoundaryFloat64(score, v.Low, v.High, v.Value)
+	var v dbValue
+	err = json.Unmarshal(value, &v)
+	if err != nil {
+		return empty, err
+	}
+
+	return newBoundaryFloat64(m.Score, v.Low, v.High, v.Value)
 }
 
 func newBoundaryFloat64(ip float64, lower, upper bool, value []byte) (boundary, error) {
@@ -246,8 +261,7 @@ func (b *boundary) ToDBValue() dbValue {
 }
 
 func (b *boundary) Bytes() []byte {
-	data, _ := json.Marshal(b.ToDBValue())
-	return data
+	return b.ToDBValue().Bytes()
 }
 
 func (b *boundary) IsInf() bool {
@@ -264,18 +278,17 @@ func (b *boundary) Insert(tx *nutsdb.Tx, bucketKV string, zKey []byte) error {
 
 // Insert adds the necessary commands to the transaction in order to be properly inserted.
 func (b *boundary) InsertInf(tx *nutsdb.Tx, bucketKV string, zKey []byte) error {
-	value := b.Bytes()
 	err := tx.ZAdd(
 		bucketKV,
 		zKey,
 		b.Score,
-		value,
+		b.Key,
 	)
 	if err != nil {
 		return fmt.Errorf("failed to insert boundary: failed to zadd boundary: %s: %w", b, err)
 	}
 
-	err = tx.Put(bucketKV, b.Key, value, 0)
+	err = tx.Put(bucketKV, b.Key, b.Bytes(), 0)
 	if err != nil {
 		return fmt.Errorf("failed to insert boundary: failed to put boundary: %s: %w", b, err)
 	}
@@ -293,12 +306,7 @@ func (b *boundary) Update(tx *nutsdb.Tx, bucketKV string) error {
 }
 
 func (b *boundary) RemoveInf(tx *nutsdb.Tx, bucketKV string, zKey []byte) error {
-	value, err := tx.Get(bucketKV, b.Key)
-	if err != nil {
-		return fmt.Errorf("failed to remove boundary: failed to get value: %s: %w", b, err)
-	}
-
-	err = tx.ZRem(bucketKV, zKey, value)
+	err := tx.ZRem(bucketKV, zKey, b.Key)
 	if err != nil {
 		return fmt.Errorf("failed to remove boundary: failed to zrem boundary: %s: %w", b, err)
 	}
@@ -337,4 +345,9 @@ type dbValue struct {
 	High  bool   `json:"high"`
 	Low   bool   `json:"low"`
 	Value []byte `json:"value"`
+}
+
+func (v dbValue) Bytes() []byte {
+	data, _ := json.Marshal(v)
+	return data
 }
