@@ -63,11 +63,11 @@ func NewNutBreaker(opts ...Option) (nb *NutBreaker, err error) {
 	}
 
 	// init database
-	err = nb.db.Update(nb.initBuckets)
+	err = nb.db.Update(nb.createBuckets)
 	if err != nil {
 		return nil, err
 	}
-	err = nb.db.Update(nb.init)
+	err = nb.db.Update(nb.initBuckets)
 	if err != nil {
 		return nil, err
 	}
@@ -79,7 +79,7 @@ func (n *NutBreaker) DataDir() string {
 	return n.dataDir
 }
 
-func (n *NutBreaker) initBuckets(tx *nutsdb.Tx) (err error) {
+func (n *NutBreaker) createBuckets(tx *nutsdb.Tx) (err error) {
 	if !tx.ExistBucket(nutsdb.DataStructureBTree, n.blacklistBucket) {
 		err = tx.NewKVBucket(n.blacklistBucket)
 		if err != nil {
@@ -104,7 +104,7 @@ func (n *NutBreaker) initBuckets(tx *nutsdb.Tx) (err error) {
 	return nil
 }
 
-func (n *NutBreaker) init(tx *nutsdb.Tx) (err error) {
+func (n *NutBreaker) initBuckets(tx *nutsdb.Tx) (err error) {
 
 	err = negInfBoundary.InsertInf(tx,
 		n.blacklistBucket,
@@ -159,12 +159,12 @@ func (n *NutBreaker) Reset() error {
 		return err
 	}
 
-	err = n.db.Update(n.initBuckets)
+	err = n.db.Update(n.createBuckets)
 	if err != nil {
 		return err
 	}
 
-	err = n.db.Update(n.init)
+	err = n.db.Update(n.initBuckets)
 	if err != nil {
 		return err
 	}
@@ -321,10 +321,27 @@ func (n *NutBreaker) vicinity(tx *nutsdb.Tx, low, high boundary, num int) (below
 	return below, inside, above, nil
 }
 
-func (n *NutBreaker) Insert(ipRange string, value []byte) error {
-	return n.db.Update(func(tx *nutsdb.Tx) error {
-		return n.insert(tx, ipRange, value)
-	})
+func (n *NutBreaker) Insert(ipRange string, value []byte) (err error) {
+	tx, err := n.db.Begin(true)
+	if err != nil {
+		return fmt.Errorf("failed to begin transaction: %v", err)
+	}
+	defer func() {
+		if err != nil {
+			err = errors.Join(err, tx.Rollback())
+		} else {
+			err = errors.Join(err, tx.Commit())
+		}
+	}()
+
+	return n.insert(tx, ipRange, value)
+
+	// use this wrapper once the bug is fixed
+	/*
+		return n.db.Update(func(tx *nutsdb.Tx) error {
+				return
+			})
+	*/
 }
 
 // Insert inserts a new IP range or IP into the database with an associated reason string
@@ -355,112 +372,146 @@ func (n *NutBreaker) insert(tx *nutsdb.Tx, ipRange string, value []byte) (err er
 		return err
 	}
 
-	belowNearest := belowN[0]
-	belowCut := low.Below(belowNearest.Value)
-
-	aboveNearest := aboveN[0]
-	aboveCut := high.Above(aboveNearest.Value)
-
-	insertLowerBound := true
-	insertUpperBound := true
-
-	if belowNearest.IsLowerBound() {
-		// need to cut below
-		if !belowNearest.EqualIP(belowCut) {
-			// can cut below |----
-			if !belowNearest.EqualReason(low) {
-				// only insert if reasons differ
-				err = belowCut.Insert(tx,
-					n.blacklistBucket,
-					n.blacklistSortedSetKey,
-				)
-				if err != nil {
-					return err
-				}
-			} else {
-				// extend range towards belowNearest
-				insertLowerBound = false
-			}
-		} else {
-			// cannot cut below
-			if !belowNearest.EqualReason(low) {
-				// if reasons differ, make beLowNearest a single bound
-				belowNearest.SetDoubleBound()
-				err = belowNearest.Insert(
-					tx,
-					n.blacklistBucket,
-					n.blacklistSortedSetKey,
-				)
-				if err != nil {
-					return err
-				}
-			} else {
-				insertLowerBound = false
-			}
-		}
-	} else if belowNearest.IsDoubleBound() && belowNearest.EqualIP(belowCut) && belowNearest.EqualReason(low) {
-		// one IP below we have a single boundary range with the same reason
-		belowNearest.SetLowerBound()
-		err = belowNearest.Insert(
-			tx,
-			n.blacklistBucket,
-			n.blacklistSortedSetKey,
-		)
-		if err != nil {
-			return err
-		}
+	// pretend that single ip ranges are also just lower or upper boundaries.
+	insertLowerBound, err := n.fixRangeBelow(tx, low.AsLowerBound(), belowN[0])
+	if err != nil {
+		return err
 	}
 
-	if aboveNearest.IsUpperBound() {
-		// need to cut above
-		if !aboveNearest.EqualIP(aboveCut) {
-			// can cut above -----|
-			if !aboveNearest.EqualReason(high) {
-				// insert if reasons differ
-				err = aboveCut.Insert(
-					tx,
-					n.blacklistBucket,
-					n.blacklistSortedSetKey,
-				)
-				if err != nil {
-					return err
-				}
-			} else {
-				// don't insert, because extends range
-				// to upperbound above
-				insertUpperBound = false
-			}
-
-		} else {
-			// cannot cut above
-			if !aboveNearest.EqualReason(high) {
-				aboveNearest.SetDoubleBound()
-				err = aboveNearest.Insert(
-					tx,
-					n.blacklistBucket,
-					n.blacklistSortedSetKey,
-				)
-				if err != nil {
-					return err
-				}
-			} else {
-				insertUpperBound = false
-			}
-		}
-	} else if aboveNearest.IsDoubleBound() && aboveNearest.EqualIP(aboveCut) && aboveNearest.EqualReason(high) {
-		// one IP above we have a single boundary range with the same reason
-		aboveNearest.SetUpperBound()
-		err = aboveNearest.Insert(
-			tx,
-			n.blacklistBucket,
-			n.blacklistSortedSetKey,
-		)
-		if err != nil {
-			return err
-		}
+	insertUpperBound, err := n.fixRangeAbove(tx, high.AsUpperBound(), aboveN[0])
+	if err != nil {
+		return err
 	}
 
 	return n.insertRange(tx, low, high, insertLowerBound, insertUpperBound)
+}
+
+func (n *NutBreaker) fixRangeBelow(tx *nutsdb.Tx, low, belowNearest boundary) (insertLowerBound bool, err error) {
+	defer func() {
+		if err != nil {
+			err = fmt.Errorf("failed to insertLowerBound %s: %v", low, err)
+		}
+	}()
+
+	belowCut := low.Below(belowNearest.Value)
+
+	if belowNearest.IsLowerBound() {
+		if belowNearest.EqualValue(low) {
+			// we try to overwrite an existing
+			// lower boundary that is exactly the same
+			// -> nothing to do
+			return false, nil
+		}
+
+		// create an upper boundary below low
+		// that closes the range to the next lower boundary
+
+		canInsertBelowLow := !belowNearest.EqualIP(belowCut)
+		if canInsertBelowLow {
+			err = belowCut.Insert(
+				tx,
+				n.blacklistBucket,
+				n.blacklistSortedSetKey,
+			)
+			if err != nil {
+				return false, err
+			}
+			return true, nil
+		}
+
+		// we would try to overwrite the existing
+		// lower boundary by inserting an upper boundary
+		// -> make the existing boundary a double boundary
+		belowNearest.SetDoubleBound()
+		err = belowNearest.Update(
+			tx,
+			n.blacklistBucket,
+		)
+		if err != nil {
+			return false, err
+		}
+
+		return true, nil
+	}
+
+	if belowNearest.IsDoubleBound() && belowNearest.EqualIP(belowCut) && belowNearest.EqualValue(low) {
+		// one IP below we have a double boundary range with the same reason
+		belowNearest.SetLowerBound()
+		err = belowNearest.Update(
+			tx,
+			n.blacklistBucket,
+		)
+		if err != nil {
+			return false, err
+		}
+		return false, nil
+	}
+
+	return true, nil
+}
+
+func (n *NutBreaker) fixRangeAbove(tx *nutsdb.Tx, high, aboveNearest boundary) (insertUpperBound bool, err error) {
+	defer func() {
+		if err != nil {
+			err = fmt.Errorf("failed to insertUpperBound %s: %v", high, err)
+		}
+	}()
+
+	aboveCut := high.Above(aboveNearest.Value)
+
+	if aboveNearest.IsUpperBound() {
+		if aboveNearest.EqualValue(high) {
+			// we try to overwrite an existing
+			// lower boundary that is exactly the same
+			// -> nothing to do
+			return false, nil
+		}
+
+		// create a upper boundary below low
+		// that closes the range to the next lower boundary
+
+		canInsertAboveHigh := !aboveNearest.EqualIP(aboveCut)
+		if canInsertAboveHigh {
+			err = aboveCut.Insert(
+				tx,
+				n.blacklistBucket,
+				n.blacklistSortedSetKey,
+			)
+			if err != nil {
+				return false, err
+			}
+			return true, nil
+		}
+
+		// we would try to overwrite the existing
+		// lower boundary by inserting an upper boundary
+		// -> make the existing boundary a double boundary
+		aboveNearest.SetDoubleBound()
+		err = aboveNearest.Update(
+			tx,
+			n.blacklistBucket,
+		)
+		if err != nil {
+			return false, err
+		}
+
+		return true, nil
+	}
+
+	if aboveNearest.IsDoubleBound() && aboveNearest.EqualIP(aboveCut) && aboveNearest.EqualValue(high) {
+		// one IP below we have a double boundary range with the same reason
+		aboveNearest.SetLowerBound()
+		err = aboveNearest.Update(
+			tx,
+			n.blacklistBucket,
+		)
+		if err != nil {
+			return false, err
+		}
+		return false, nil
+	}
+
+	return true, nil
 }
 
 // simply inserts a range, either a double boundary or a single boundary based on the boolean flags
@@ -469,9 +520,7 @@ func (n *NutBreaker) insertRange(tx *nutsdb.Tx, low, high boundary, insertLow, i
 
 		// double boundary, single insertion
 		if low.Equal(high) {
-			doubleBoundary := low
-			doubleBoundary.SetDoubleBound()
-			return doubleBoundary.Insert(
+			return low.AsDoubleBound().Insert(
 				tx,
 				n.blacklistBucket,
 				n.blacklistSortedSetKey,
@@ -497,7 +546,8 @@ func (n *NutBreaker) insertRange(tx *nutsdb.Tx, low, high boundary, insertLow, i
 		}
 		return nil
 	} else if insertLow {
-		err = low.Insert(
+
+		err = low.AsLowerBound().Insert(
 			tx,
 			n.blacklistBucket,
 			n.blacklistSortedSetKey,
@@ -506,7 +556,7 @@ func (n *NutBreaker) insertRange(tx *nutsdb.Tx, low, high boundary, insertLow, i
 			return err
 		}
 	} else if insertHigh {
-		err = high.Insert(
+		err = high.AsUpperBound().Insert(
 			tx,
 			n.blacklistBucket,
 			n.blacklistSortedSetKey,
@@ -693,7 +743,7 @@ func (n *NutBreaker) find(tx *nutsdb.Tx, ip string) (value []byte, err error) {
 	aboveNearest := above[0]
 
 	if belowNearest.IsLowerBound() && aboveNearest.IsUpperBound() {
-		if belowNearest.EqualReason(aboveNearest) {
+		if belowNearest.EqualValue(aboveNearest) {
 			return belowNearest.Value, nil
 		}
 		return nil, fmt.Errorf("reasons inconsistent: %v != %v", belowNearest.Value, aboveNearest.Value)

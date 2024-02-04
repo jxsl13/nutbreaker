@@ -205,10 +205,28 @@ func (b *boundary) IsLowerBound() bool {
 	return b.IsSingleBound() && b.LowerBound
 }
 
+func (b boundary) AsLowerBound() boundary {
+	if b.IsLowerBound() {
+		return b
+	}
+	bCopy := b
+	bCopy.SetLowerBound()
+	return bCopy
+}
+
 // SetLowerBound sets b to be a single upper boundary.
 func (b *boundary) SetUpperBound() {
 	b.LowerBound = false
 	b.UpperBound = true
+}
+
+func (b boundary) AsUpperBound() boundary {
+	if b.IsUpperBound() {
+		return b
+	}
+	bCopy := b
+	bCopy.SetUpperBound()
+	return bCopy
 }
 
 // IsUpperBound only returns true if the boundary is a single boundary as well as an upper boundary.
@@ -220,6 +238,15 @@ func (b *boundary) IsUpperBound() bool {
 func (b *boundary) SetDoubleBound() {
 	b.LowerBound = true
 	b.UpperBound = true
+}
+
+func (b boundary) AsDoubleBound() boundary {
+	if b.IsDoubleBound() {
+		return b
+	}
+	bCopy := b
+	bCopy.SetDoubleBound()
+	return bCopy
 }
 
 // IsDoubleBound only returns true if both lower and upper bounds are true
@@ -240,16 +267,18 @@ func (b *boundary) Equal(other boundary) bool {
 		bytes.Equal(b.Value, other.Value)
 }
 
-// EqualIP returns true if both IPs are equal as well as both Int64 and Score values.
 func (b *boundary) EqualIP(other boundary) bool {
 	return b.IP == other.IP &&
 		b.Score == other.Score
 }
 
 // EqualValue returns true if values are equal and not empty, false otherwise.
-// TODO: rename to EqualValue
-func (b *boundary) EqualReason(other boundary) bool {
+func (b *boundary) EqualValue(other boundary) bool {
 	return bytes.Equal(b.Value, other.Value)
+}
+
+func (b *boundary) EqualIPValue(other boundary) bool {
+	return b.EqualIP(other) && b.EqualValue(other)
 }
 
 func (b *boundary) ToDBValue() dbValue {
@@ -268,7 +297,7 @@ func (b *boundary) IsInf() bool {
 	return b.Score == posInf || b.Score == negInf
 }
 
-func (b *boundary) Insert(tx *nutsdb.Tx, bucketKV string, zKey []byte) error {
+func (b boundary) Insert(tx *nutsdb.Tx, bucketKV string, zKey []byte) error {
 	if b.IsInf() {
 		panic(fmt.Sprintf("cannot insert infinite boundary with Insert: %s", b))
 	}
@@ -276,7 +305,7 @@ func (b *boundary) Insert(tx *nutsdb.Tx, bucketKV string, zKey []byte) error {
 }
 
 // Insert adds the necessary commands to the transaction in order to be properly inserted.
-func (b *boundary) InsertInf(tx *nutsdb.Tx, bucketKV string, zKey []byte) error {
+func (b boundary) InsertInf(tx *nutsdb.Tx, bucketKV string, zKey []byte) error {
 	err := tx.ZAdd(
 		bucketKV,
 		zKey,
@@ -296,7 +325,7 @@ func (b *boundary) InsertInf(tx *nutsdb.Tx, bucketKV string, zKey []byte) error 
 
 // Update adds the needed commands to the transaction in order to update the assiciated attributes of the
 // unserlying IP. The IP itself cannot be updated with this command.
-func (b *boundary) Update(tx *nutsdb.Tx, bucketKV string) error {
+func (b boundary) Update(tx *nutsdb.Tx, bucketKV string) error {
 	err := tx.PutIfExists(bucketKV, b.Key, b.Bytes(), 0)
 	if err != nil {
 		return fmt.Errorf("failed to update boundary: %s: %w", b, err)
@@ -304,7 +333,7 @@ func (b *boundary) Update(tx *nutsdb.Tx, bucketKV string) error {
 	return nil
 }
 
-func (b *boundary) RemoveInf(tx *nutsdb.Tx, bucketKV string, zKey []byte) error {
+func (b boundary) RemoveInf(tx *nutsdb.Tx, bucketKV string, zKey []byte) error {
 	err := tx.ZRem(bucketKV, zKey, b.Key)
 	if err != nil {
 		return fmt.Errorf("failed to remove boundary: failed to zrem boundary: %s: %w", b, err)
@@ -318,16 +347,15 @@ func (b *boundary) RemoveInf(tx *nutsdb.Tx, bucketKV string, zKey []byte) error 
 }
 
 // Remove adds the necessary commands to the transaction in order to be properly removed.
-func (b *boundary) Remove(tx *nutsdb.Tx, bucketKV string, zKey []byte) (err error) {
+func (b boundary) Remove(tx *nutsdb.Tx, bucketKV string, zKey []byte) (err error) {
 	if b.IsInf() {
-		// nothing to do
-		return nil
+		panic(fmt.Sprintf("cannot remove infinite boundary with Insert: %s", b))
 	}
 	return b.RemoveInf(tx, bucketKV, zKey)
 }
 
 // Get adds the necessary commands to the transaction in order to retrieve the attributs from the database.
-func (b *boundary) Get(tx *nutsdb.Tx, bucketKV string) (dbValue, error) {
+func (b boundary) Get(tx *nutsdb.Tx, bucketKV string) (dbValue, error) {
 	data, err := tx.Get(bucketKV, b.Key)
 	if err != nil {
 		return dbValue{}, fmt.Errorf("failed to get boundary: %s: %w", b, err)

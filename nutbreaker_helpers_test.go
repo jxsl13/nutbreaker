@@ -59,7 +59,7 @@ func insert(t *testing.T, ndb *NutBreaker, sameValue bool, ipRanges ...string) (
 		}
 
 		lo, hi, err := parseRange(r, value)
-		require.NoError(err, "parseRange() error = %v, wantErr %v", err, true)
+		require.NoError(err, "parseRange(): %s", r)
 
 		if lo.Equal(hi) {
 			b = append(b, lo)
@@ -68,7 +68,7 @@ func insert(t *testing.T, ndb *NutBreaker, sameValue bool, ipRanges ...string) (
 		}
 
 		err = ndb.Insert(r, value)
-		require.NoError(err, "Insert() error = %v, wantErr %v", err, true)
+		require.NoError(err, "Insert(): %s", r)
 	}
 	return b
 }
