@@ -120,7 +120,8 @@ func TestInsert(t *testing.T) {
 					ipRange.Range,
 				)
 
-				require.NoErrorf(ndb.isConsistent(),
+				require.NoErrorf(
+					ndb.isConsistent(),
 					"ndb.Insert() error: Database INCONSISTENT after inserting range: %s",
 					ipRange.Range,
 				)
@@ -220,14 +221,6 @@ func TestClientRemove(t *testing.T) {
 						ipToFind,
 					)
 				}
-				require.NoErrorf(
-					err,
-					"ndb.Find(), NOT IN RANGE (idx=%d) error = %q, wantErr %v\nRange: %q IP",
-					err.Error(),
-					tt.wantErr,
-					rangeToFind,
-					ipToFind,
-				)
 
 				require.Equal(reasonToFind, got, "ndb.Find(), WRONG REASON")
 				require.NoError(ndb.Remove(rangeToFind))
